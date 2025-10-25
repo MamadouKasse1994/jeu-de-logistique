@@ -1,0 +1,3 @@
+[general]
+# Spécifie la version de Python à utiliser.
+python = "3.11"
