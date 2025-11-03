@@ -1,3 +1,6 @@
+# COLLEZ ICI LE CONTENU INTÉGRAL DE VOTRE FICHIER 07_Jeu.py (les 1014 lignes)
+# Assurez-vous d'inclure les fonctions et les constantes manquantes (simulate_turn_streamlit, COLIS_TYPES, etc.)
+# Une fois le code collé et ce bloc terminé par 
 import streamlit as st
 import random
 import numpy as np
@@ -78,13 +81,35 @@ supabase: Client = init_supabase()
 
 # ---------------- FONCTIONS DE SYNCHRONISATION MULTIJOUEUR ----------------
 
+# --- NOUVELLE FONCTION UTILITAIRE POUR LA SÉRIALISATION ---
+def to_serializable(obj):
+    """Gère la conversion d'objets non-JSON-compatibles (uuid, datetime, etc.) en str."""
+    if isinstance(obj, uuid.UUID) or isinstance(obj, datetime.datetime):
+        return str(obj)
+    # Si c'est un dict ou une liste, deepcopy va s'en charger.
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 def save_game_state_to_db(game_id, game_state):
     """Sauvegarde l'état complet du jeu dans Supabase."""
+    # On prend une copie profonde pour s'assurer qu'on ne modifie pas l'objet original
+    # et on nettoie l'état de la session Streamlit (qui contient des objets non-sûrs)
+    game_state_data = deepcopy(game_state)
+    
+    # On isole uniquement les clés pertinentes pour le jeu
+    # et on s'assure qu'elles sont converties en dictionnaire simple
+    keys_to_save = ['game_id', 'turn', 'market_trend', 'backlog_packages', 'event_history', 
+                    'current_event', 'players', 'num_ia_players', 'host_name', 
+                    'actions_this_turn', 'players_ready', 'game_ready', 'my_name', 'current_user_name']
+
+    state_to_save = {k: game_state_data.get(k) for k in keys_to_save if k in game_state_data}
+
+    # Sérialisation forcée utilisant la fonction utilitaire to_serializable
     data_to_save = {
         "game_id": game_id,
-        "state_json": json.dumps(deepcopy(game_state), default=str), 
+        # Utilisation du paramètre default pour gérer la sérialisation des UUIDs, etc.
+        "state_json": json.dumps(state_to_save, default=to_serializable), 
         "turn": game_state.get('turn', 1),
-        "updated_at": datetime.datetime.now().isoformat() # <--- LIGNE CORRIGÉE
+        "updated_at": datetime.datetime.now().isoformat()
     }
     
     response = supabase.table("games").upsert(data_to_save).execute()
@@ -95,11 +120,17 @@ def load_game_state_from_db(game_id):
     try:
         response = supabase.table("games").select("state_json").eq("game_id", game_id).single().execute()
     except Exception:
-        return None # Gestion des erreurs si la partie n'existe pas ou erreur de connexion
+        # Gère les erreurs si la partie n'existe pas ou erreur de connexion
+        # st.error("Erreur lors du chargement de l'état du jeu.") 
+        return None
         
-    if response.data:
-        loaded_state = json.loads(response.data["state_json"])
-        return loaded_state
+    if response.data and response.data["state_json"]:
+        try:
+            loaded_state = json.loads(response.data["state_json"])
+            return loaded_state
+        except json.JSONDecodeError:
+            st.error("Erreur de décodage JSON de l'état du jeu.")
+            return None
     return None
 
 def update_game_chat(game_id, player_name, message):
@@ -110,10 +141,12 @@ def update_game_chat(game_id, player_name, message):
         "message": message,
         "timestamp": time.strftime("%H:%M:%S", time.localtime())
     }
+    # Utilisation d'insert pour ajouter un nouveau message
     supabase.table("chat_messages").insert(new_message).execute()
 
 def load_game_chat(game_id):
     """Charge les 10 derniers messages du chat."""
+    # Ajout d'une colonne de tri pour s'assurer que les messages sont ordonnés
     response = supabase.table("chat_messages").select("sender, message, timestamp").eq("game_id", game_id).order("timestamp", desc=True).limit(10).execute()
     return response.data if response.data else []
 
@@ -122,7 +155,8 @@ def load_game_chat(game_id):
 
 def _new_truck(model):
     new_truck = deepcopy(model)
-    new_truck["uuid"] = str(uuid.uuid4())
+    # L'UUID est généré comme un objet UUID, la fonction to_serializable le convertira en str lors de la sauvegarde
+    new_truck["uuid"] = uuid.uuid4() 
     return new_truck
 
 def generate_player_names(num_ia):
@@ -150,7 +184,9 @@ def initialize_game_state(host_player_name, num_ia_players):
         "players": [],
         "num_ia_players": num_ia_players,
         "host_name": host_player_name,
-        "current_human_player_index": 0,
+        # Ces deux clés ne sont plus nécessaires pour la logique de tour, mais sont conservées
+        # pour la structure des données Streamlit et le multijoueur.
+        "current_human_player_index": 0, 
         "actions_this_turn": {},
         "players_ready": {host_player_name: False}, # Nouveau pour suivre les validations
         "game_ready": True
@@ -158,8 +194,10 @@ def initialize_game_state(host_player_name, num_ia_players):
     
     for name in player_names:
         is_human = name == host_player_name
+        # On s'assure que si un joueur rejoint, il est considéré comme humain,
+        # mais ici lors de l'initialisation, seul l'hôte est humain, les autres IA
         if not name.startswith("Ent. ") and name != host_player_name:
-            is_human = True # Marque tous les joueurs rejoignant la partie comme humains
+            is_human = False # Lors de l'initialisation, c'est IA sauf l'hôte.
             
         game_state["players"].append({
             "name": name,
@@ -181,7 +219,9 @@ def initialize_game_state(host_player_name, num_ia_players):
         })
 
     # Sauvegarde initiale dans la BDD
-    save_game_state_to_db(game_id, game_state)
+    # On utilise l'état global de st.session_state pour la sauvegarde
+    st.session_state.update(game_state)
+    save_game_state_to_db(game_id, st.session_state)
     
     return game_state
 
@@ -354,6 +394,9 @@ def simulate_turn_streamlit(game_state, actions_dict):
     # 1. Actions IA
     for i, p in enumerate(game_state["players"]):
         if not p["is_human"]:
+            # On calcule la capacité ici pour que l'IA puisse prendre de bonnes décisions
+            p_cap = calculate_player_capacity(p)
+            p["total_capacity"] = p_cap
             ia_action = get_ia_actions(p)
             actions_dict[p["name"]] = ia_action
     
@@ -506,6 +549,11 @@ def simulate_turn_streamlit(game_state, actions_dict):
     # 2. Distribution clients et mise à jour de l'état
     active_players_for_distribution = [p for p in game_state["players"] if p["active"]]
     
+    # On recalcule la capacité après les achats/ventes/R&D pour tous les joueurs actifs
+    for p in active_players_for_distribution:
+        p_cap = calculate_player_capacity(p)
+        p["total_capacity"] = p_cap
+    
     allocations_capacity = distribute_clients(market_capacity_demand, active_players_for_distribution, game_state)
 
     # --- PHASE DE CALCUL DES RÉSULTATS ET VÉRIFICATION DE LA FAILLITE ---
@@ -623,48 +671,66 @@ def get_ia_actions(p):
     capacity = p.get("total_capacity", 0)
     action = {"prices": deepcopy(p["prices"]), "buy_trucks": {}, "sell_trucks": {}}
 
+    # On utilise une estimation des coûts avant calcul du tour
     monthly_costs_est = (p["employees"] * SALARY_PER_EMP) + (truck_count * INSURANCE_PER_TRUCK_BASE) + FIXED_COSTS
 
     # --- 1. Gestion de la Faillite/Crise (Priorité Absolue) ---
     if not p["active"] and p.get("can_recover"):
+        # Si la dette est massive et le cash très négatif
         if current_money < -monthly_costs_est * 2 and truck_count > 1:
             m1_trucks = [t for t in p["trucks"] if t.get("id") == "M1 (Lent)"]
             if m1_trucks:
                 action["sell_trucks"] = {"M1 (Lent)": 1}
                 return action
-        elif current_money < -10000 and p["loan"] == 0:
-             action["loan_request"] = 20000
+        # Si juste cash négatif mais dette gérable, on prend un petit prêt si possible
+        elif current_money < -10000 and p["loan"] == 0 and truck_count > 0:
+             asset_value = calculate_asset_value(p["trucks"])
+             if asset_value * MAX_LOAN_CAPACITY_RATIO > 20000:
+                 action["loan_request"] = 20000
+                 return action # Arrêt immédiat après une action critique
+        # Si juste cash négatif, on essaie de vendre un M1 si on en a plus d'un
+        elif current_money < 0 and truck_count > 1:
+            m1_trucks = [t for t in p["trucks"] if t.get("id") == "M1 (Lent)"]
+            if m1_trucks:
+                action["sell_trucks"] = {"M1 (Lent)": 1}
+                return action
 
     if not p["active"]: 
         return action
 
     # --- 2. Stratégie de Croissance (Si Solde Sain) ---
-    if current_money > 120000 and truck_count < 15 and capacity < 600:
+    # Si on a de la marge et que la capacité est encore faible
+    if current_money > 120000 + monthly_costs_est * 2 and capacity < 600:
         if random.random() < 0.3:
-            action["buy_trucks"] = {"M3 (Rapide)": 1}
-        else:
+            # On vérifie qu'on ne dépasse pas un maximum de camions pour ne pas spammer
+            if len([t for t in p["trucks"] if t["id"] == "M3 (Rapide)"]) < 5:
+                action["buy_trucks"] = {"M3 (Rapide)": 1}
+        elif len([t for t in p["trucks"] if t["id"] == "M2 (Moyen)"]) < 10:
             action["buy_trucks"] = {"M2 (Moyen)": 1}
         
     # --- 3. Stratégie de R&D et Publicité ---
-    if current_money > 80000 and p["rd_boost_log"] < 0.15 and random.random() < 0.2:
+    if current_money > 80000 + monthly_costs_est and p["rd_boost_log"] < 0.15 and random.random() < 0.2:
         action["rd_type"] = "Logistique"
         
-    if p["reputation"] < 0.8 and current_money > 15000:
+    if p["reputation"] < 0.8 and current_money > 15000 + monthly_costs_est:
         action["pub_type"] = "Nationale"
         
     # --- 4. Gestion des Prêts ---
     min_payment_due = p["loan"] * MIN_LOAN_PAYMENT_RATIO
-    if p["loan"] > 0 and current_money > 50000 + monthly_costs_est:
+    if p["loan"] > 0 and current_money > 50000 + monthly_costs_est * 2:
+        # Remboursement agressif
         action["loan_payment"] = int(p["loan"] * 0.3)
     elif p["loan"] > 0 and current_money > min_payment_due + monthly_costs_est * 1.5:
+        # Remboursement minimum
         action["loan_payment"] = int(min_payment_due * 1.5)
 
     # --- 5. Ajustement des Prix ---
-    if p["reputation"] > 1.2 and random.random() < 0.1:
+    # L'IA essaie d'adapter ses prix en fonction de la réputation
+    if p["reputation"] > 1.2 and random.random() < 0.15:
           for t in action["prices"]:
               action["prices"][t] = int(action["prices"][t] * 1.05)
               
-    elif p["reputation"] < 0.9 and random.random() < 0.1:
+    elif p["reputation"] < 0.9 and random.random() < 0.15:
           for t in action["prices"]:
               action["prices"][t] = int(action["prices"][t] * 0.95)
 
@@ -675,11 +741,13 @@ def get_ia_actions(p):
 def run_next_turn(actions_dict):
     """ Lance la simulation du tour, met à jour l'état et le synchronise. """
     
-    # 1. Copie de l'état actuel
-    current_state = deepcopy(st.session_state)
+    # 1. Copie de l'état actuel de la session pour la simulation
+    # On travaille sur une copie de deepcopy(st.session_state) pour éviter
+    # les erreurs de modification pendant le calcul.
+    current_state_copy = deepcopy(dict(st.session_state))
     
-    # 2. Exécution du tour (Met à jour current_state)
-    new_state_data = simulate_turn_streamlit(current_state, actions_dict)
+    # 2. Exécution du tour (Met à jour current_state_copy)
+    new_state_data = simulate_turn_streamlit(current_state_copy, actions_dict)
     
     # 3. Finalisation du tour
     new_state_data["turn"] += 1
@@ -688,8 +756,12 @@ def run_next_turn(actions_dict):
     new_state_data["actions_this_turn"] = {}
     new_state_data["players_ready"] = {p["name"]: False for p in new_state_data["players"] if p["is_human"]} 
     
-    # 5. Mise à jour de la session Streamlit et sauvegarde dans la BDD
+    # 5. Mise à jour de la session Streamlit
+    # L'état complet de la session est mis à jour avec les résultats
     st.session_state.update(new_state_data)
+    
+    # 6. Sauvegarde dans la BDD
+    # save_game_state_to_db utilise deepcopy(st.session_state) et to_serializable
     save_game_state_to_db(st.session_state.game_id, st.session_state)
 
 
@@ -709,7 +781,7 @@ def show_delivery_summary(players_list):
         delivery_data.append(row)
         
     df = pd.DataFrame(delivery_data).set_index("Entreprise")
-    st.dataframe(df.sort_values(by="Total Livré", ascending=False))
+    st.dataframe(df.sort_values(by="Total Livré", ascending=False), use_container_width=True)
     
 def show_final_results():
     """Affiche le classement final."""
@@ -743,9 +815,17 @@ def get_human_actions_form(player_data, disabled=False):
     current_emp = player_data["employees"]
     current_rd_type = player_data.get("rd_investment_type", "Aucun")
     
-    if not player_data["active"]:
-        st.warning(f"Votre statut est 'Faillite'. Vous ne pouvez que vendre des actifs.")
-        disabled = False # On autorise la vente pour récupérer
+    # Si le joueur est en faillite, on désactive tout sauf la vente de camions
+    if not player_data["active"] and player_data.get("can_recover"):
+        st.warning(f"Votre statut est 'Faillite'. Vous devez vendre des actifs pour redevenir actif.")
+        disabled = False # On autorise la vente pour récupérer, mais on gère le reste par des 'if'
+        is_bankrupt = True
+    else:
+        is_bankrupt = False
+        
+    # On ajoute une vérification de la liquidité ici pour éviter des transactions impossibles
+    def check_funds(cost):
+        return disabled or current_money < cost
 
     with st.form(key=f"form_{player_data['name']}", clear_on_submit=False):
         
@@ -774,41 +854,48 @@ def get_human_actions_form(player_data, disabled=False):
         for model in TRUCK_MODELS:
             col_buy, col_sell = st.columns(2)
             
-            # Achat
-            buy_qty = col_buy.number_input(f"Acheter {model['id']} ({model['price']:,.0f} €)", min_value=0, value=0, key=f"buy_{model['id']}_{player_data['name']}", disabled=disabled)
+            # Achat (désactivé si en faillite ou si le tour est verrouillé)
+            buy_disabled = disabled or is_bankrupt or check_funds(model['price'])
+            buy_qty = col_buy.number_input(f"Acheter {model['id']} ({model['price']:,.0f} €)", min_value=0, value=0, key=f"buy_{model['id']}_{player_data['name']}", disabled=buy_disabled)
             buy_actions[model['id']] = buy_qty
             
-            # Vente
+            # Vente (toujours possible en faillite, mais désactivé si le tour est verrouillé)
             trucks_owned = len([t for t in player_data['trucks'] if t['id'] == model['id']])
-            sell_qty = col_sell.number_input(f"Vendre {model['id']} (Possédés: {trucks_owned})", min_value=0, max_value=trucks_owned, value=0, key=f"sell_{model['id']}_{player_data['name']}", disabled=False if not player_data["active"] else disabled)
+            sell_disabled = disabled and not is_bankrupt # Si actif et verrouillé, on désactive.
+            sell_qty = col_sell.number_input(f"Vendre {model['id']} (Possédés: {trucks_owned})", min_value=0, max_value=trucks_owned, value=0, key=f"sell_{model['id']}_{player_data['name']}", disabled=sell_disabled)
             sell_actions[model['id']] = sell_qty
             
         actions["buy_trucks"] = buy_actions
         actions["sell_trucks"] = sell_actions
             
-        # Prêts et Remboursements
+        # Prêts et Remboursements (désactivé si en faillite ou si le tour est verrouillé)
         st.subheader("Prêts Bancaires")
         col_loan_req, col_loan_pay = st.columns(2)
-        loan_request = col_loan_req.number_input("Demander un Prêt (€)", min_value=0, step=1000, value=0, disabled=disabled)
-        loan_payment = col_loan_pay.number_input("Rembourser un Prêt (€)", min_value=0, step=1000, max_value=int(current_loan) if current_loan > 0 else 0, value=0, disabled=disabled)
+        loan_request = col_loan_req.number_input("Demander un Prêt (€)", min_value=0, step=1000, value=0, disabled=disabled or is_bankrupt)
+        loan_payment = col_loan_pay.number_input("Rembourser un Prêt (€)", min_value=0, step=1000, max_value=int(current_loan) if current_loan > 0 else 0, value=0, disabled=disabled or is_bankrupt)
         actions["loan_request"] = loan_request
         actions["loan_payment"] = loan_payment
         
         # R&D
         st.subheader("Recherche & Développement")
         rd_options = ["Aucun"] + list(R_D_TYPES.keys())
-        rd_type = st.selectbox("Investissement R&D (Annuel)", rd_options, index=rd_options.index(current_rd_type) if current_rd_type in rd_options else 0, disabled=disabled)
+        # Déterminer si l'investissement R&D est possible
+        rd_cost = R_D_TYPES.get(current_rd_type, {}).get("cost", 0) if current_rd_type != "Aucun" else 0
+        rd_disabled = disabled or is_bankrupt or check_funds(rd_cost)
+        rd_type = st.selectbox("Investissement R&D (Annuel)", rd_options, index=rd_options.index(current_rd_type) if current_rd_type in rd_options else 0, disabled=rd_disabled)
         actions["rd_type"] = rd_type
         
         # Publicité
         st.subheader("Campagne de Publicité (Réputation)")
         pub_options = ["Aucun", "Locale", "Nationale", "Globale"]
-        pub_type = st.selectbox("Type de Publicité", pub_options, disabled=disabled)
+        # On désactive si en faillite ou si le tour est verrouillé
+        pub_type = st.selectbox("Type de Publicité", pub_options, disabled=disabled or is_bankrupt)
         actions["pub_type"] = pub_type
         
         # Employés
         st.subheader("Gestion des Employés (Actuel: " + str(current_emp) + ")")
-        emp_delta = st.number_input("Embaucher (+) / Licencier (-)", min_value=-current_emp, value=0, step=1, disabled=disabled)
+        emp_disabled = disabled or is_bankrupt # On désactive si en faillite ou si le tour est verrouillé
+        emp_delta = st.number_input("Embaucher (+) / Licencier (-)", min_value=-current_emp, value=0, step=1, disabled=emp_disabled)
         actions["emp_delta"] = emp_delta
         
         st.form_submit_button("Pré-Validation (Ne valide pas le tour!)", disabled=True, help="Cliquez sur le bouton bleu principal pour valider le tour")
@@ -840,6 +927,9 @@ def show_chat_sidebar(game_id, player_name):
         loaded_state = load_game_state_from_db(game_id)
         if loaded_state:
              st.session_state.update(loaded_state)
+             # On remet les clés spécifiques à l'utilisateur qui ne sont pas sauvegardées
+             st.session_state.my_name = st.session_state.get('my_name', st.session_state.get('current_user_name'))
+             st.session_state.current_user_name = st.session_state.get('current_user_name', st.session_state.get('my_name'))
              st.rerun()
         else:
              st.error("Impossible de se synchroniser. Vérifiez la connexion.")
@@ -864,8 +954,10 @@ def main():
         num_ia = st.number_input("Nombre d'entreprises IA (concurrents)", min_value=1, max_value=9, value=3)
         
         if st.button("🚀 Créer et Héberger la Partie", type="primary"):
-            st.session_state.update(initialize_game_state(player_name, num_ia))
+            # initialize_game_state va initialiser st.session_state et sauvegarder dans la BDD
+            initialize_game_state(player_name, num_ia) 
             st.session_state.my_name = player_name
+            st.session_state.game_id = st.session_state.get("game_id") # Récupère l'ID généré
             st.success(f"Partie créée! ID: {st.session_state.game_id}")
             st.rerun()
             
@@ -875,7 +967,6 @@ def main():
         if st.button("🔗 Rejoindre la Partie"):
             loaded_state = load_game_state_from_db(join_id)
             if loaded_state:
-                st.session_state.my_name = player_name
                 
                 # Ajouter le joueur s'il n'est pas déjà dans la partie
                 if player_name not in [p['name'] for p in loaded_state['players']]:
@@ -891,17 +982,36 @@ def main():
                     loaded_state['players'].append(new_player)
                     loaded_state['players_ready'][player_name] = False
                     
-                    loaded_state['num_human_players'] = len([p for p in loaded_state['players'] if p['is_human']])
-                    save_game_state_to_db(join_id, loaded_state)
-                
-                st.session_state.update(loaded_state)
-                st.session_state.game_id = join_id
+                    # Mise à jour des joueurs humains (non stockée, mais utile pour l'affichage)
+                    # loaded_state['num_human_players'] = len([p for p in loaded_state['players'] if p['is_human']])
+                    
+                    # Mise à jour de la session Streamlit et sauvegarde de l'état modifié
+                    st.session_state.update(loaded_state)
+                    st.session_state.my_name = player_name
+                    st.session_state.game_id = join_id
+                    save_game_state_to_db(join_id, st.session_state)
+                    
+                else:
+                    # Si le joueur existe déjà, on charge juste l'état
+                    st.session_state.update(loaded_state)
+                    st.session_state.my_name = player_name
+                    st.session_state.game_id = join_id
+
+                st.success(f"Partie {join_id} rejointe.")
                 st.rerun()
             else:
                 st.error("Partie non trouvée ou ID invalide.")
         return
         
     # ---------------- DÉBUT DE L'INTERFACE DE JEU ----------------
+    
+    # On s'assure que les variables essentielles existent après l'écran de connexion
+    if 'game_id' not in st.session_state or 'my_name' not in st.session_state:
+         st.error("Erreur de session. Veuillez reconfigurer la partie.")
+         if st.button("Retour à l'accueil"):
+             st.session_state.clear()
+             st.rerun()
+         return
     
     game_id = st.session_state.game_id
     my_name = st.session_state.my_name
@@ -915,7 +1025,7 @@ def main():
     # Vérication de fin de partie
     active_players = [p for p in st.session_state.players if p['active'] or p.get('can_recover')]
     
-    if len([p for p in active_players if not p['is_human']]) == 0 or st.session_state.turn > 20: 
+    if len([p for p in active_players if p['is_human']]) == 0 or st.session_state.turn > 20: 
         st.error("FIN DE LA SIMULATION : La partie est terminée.")
         show_final_results()
         if st.button("Recommencer la configuration"):
@@ -936,7 +1046,12 @@ def main():
     
     human_players = [p for p in st.session_state.players if p["is_human"]]
     player_human = next((p for p in human_players if p["name"] == my_name), None)
-        
+    
+    # S'assurer que l'objet joueur est trouvé (nécessaire si l'ID d'utilisateur change)
+    if player_human is None:
+        st.error(f"Impossible de trouver les données pour le joueur **{my_name}**. Veuillez relancer la page ou rejoindre à nouveau la partie.")
+        return
+
     is_ready = st.session_state.players_ready.get(my_name, False)
     
     st.divider()
@@ -959,6 +1074,7 @@ def main():
             st.session_state.players_ready[my_name] = True
             
             # Sauvegarder immédiatement l'état local dans la BDD pour que les autres le voient
+            # La fonction save_game_state_to_db va gérer la sérialisation
             save_game_state_to_db(game_id, st.session_state)
             
             st.success(f"Actions de {my_name} enregistrées. En attente des autres joueurs...")
@@ -976,12 +1092,20 @@ def main():
         
         if ready_count == total_human:
             st.success("TOUS LES JOUEURS SONT PRÊTS. Le tour peut être exécuté.")
-            if st.button("▶️ Exécuter le Prochain Tour", type="primary"):
-                all_actions = st.session_state.actions_this_turn
-                run_next_turn(all_actions)
-                st.rerun()
+            # Seul l'hôte (ou le premier à être un humain) devrait en théorie pouvoir cliquer
+            if st.button("▶️ Exécuter le Prochain Tour", type="primary", disabled=not player_human["active"]): 
+                # On vérifie si le joueur est actif
+                if not player_human["active"]:
+                     st.error("Vous êtes en faillite. Vous ne pouvez pas exécuter le tour.")
+                     st.rerun()
+                else:
+                    all_actions = st.session_state.actions_this_turn
+                    run_next_turn(all_actions)
+                    st.rerun()
         else:
-            st.info(f"Joueurs en attente: {', '.join([p['name'] for p in human_players if not st.session_state.players_ready.get(p['name'])])}")
+            # Afficher les joueurs non prêts
+            waiting_players = [p['name'] for p in human_players if not st.session_state.players_ready.get(p['name'])]
+            st.info(f"Joueurs en attente : {', '.join(waiting_players)}")
             
     st.divider()
     
@@ -992,13 +1116,15 @@ def main():
         data = []
         for p in st.session_state.players:
              status = "ACTIF" if p["active"] else ("FAILLITE (Vendre Actifs)" if p.get("can_recover") else "LIQUIDÉE")
+             # Utilisation de la dernière capacité calculée au moment de la simulation du tour
+             current_capacity = calculate_player_capacity(p)
              data.append({
                  "Entreprise": p["name"],
                  "Statut": status,
                  "Trésorerie": f"{p['money']:,.0f} €",
                  "Dette": f"{p['loan']:,.0f} €",
                  "Réputation": f"{p['reputation']:.2f}",
-                 "Capacité Totale": calculate_player_capacity(p),
+                 "Capacité Totale": current_capacity, # Affichage de la capacité calculée
                  "Revenus (T-{st.session_state.turn-1})": f"{p.get('income', 0):,.0f} €",
                  "Dépenses (T-{st.session_state.turn-1})": f"{p.get('expenses', 0):,.0f} €",
                  "Histoire du Tour": "; ".join(p.get('history', ['N/A']))
