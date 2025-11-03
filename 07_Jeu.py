@@ -741,6 +741,17 @@ def update_session_from_db(loaded_state):
          st.session_state.current_user_name = st.session_state.my_name
 
 
+def sync_game_state(game_id):
+    """Force le chargement de l'état du jeu depuis la DB et déclenche un rerun."""
+    loaded_state = load_game_state_from_db(game_id)
+    if loaded_state:
+         update_session_from_db(loaded_state)
+         st.success("Synchronisation effectuée. Actualisation...")
+         st.rerun()
+    else:
+         st.error("Impossible de se synchroniser. Vérifiez la connexion.")
+
+
 def run_next_turn(actions_dict):
     """ Lance la simulation du tour, met à jour l'état et le synchronise. """
     
@@ -909,13 +920,7 @@ def show_chat_sidebar(game_id, player_name):
         chat_box.write(f"**{msg['timestamp']} {msg['sender']}**: {msg['message']}")
     
     if st.sidebar.button("🔄 Actualiser le Statut du Jeu", help="Cliquez pour forcer la synchronisation avec la partie en cours."):
-        st.info("Synchronisation...")
-        loaded_state = load_game_state_from_db(game_id)
-        if loaded_state:
-             update_session_from_db(loaded_state)
-             st.rerun()
-        else:
-             st.error("Impossible de se synchroniser. Vérifiez la connexion.")
+        sync_game_state(game_id)
 
 # ---------------- LOGIQUE DU LOBBY ----------------
 
@@ -926,6 +931,18 @@ def show_lobby_host(game_id, host_name):
     st.info(f"ID de la Partie: **{game_id}** | Contrôleur: **{host_name}**")
     
     st.markdown("---")
+    
+    # === BLOC DE SYNCHRONISATION/ACTUALISATION DÉDIÉ ===
+    st.subheader("🔁 Synchronisation du Lobby")
+    
+    if st.button("Actualiser le Lobby (Voir les Nouveaux Joueurs)", type="secondary", use_container_width=True):
+        st.info("Synchronisation forcée...")
+        sync_game_state(game_id)
+        
+    st.caption("Pour une meilleure expérience, demandez aux joueurs invités de cliquer sur le bouton 'Actualiser le Statut du Jeu' dans la barre latérale.")
+    st.markdown("---")
+    # =================================================
+
     
     # 1. Gestion des joueurs en attente
     st.subheader("🚪 Joueurs en Attente d'Approbation")
@@ -966,7 +983,9 @@ def show_lobby_host(game_id, host_name):
     st.subheader("👥 Joueurs Participants (Humains)")
     human_players = [p for p in st.session_state.players if p['is_human']]
     if human_players:
-        st.write(", ".join([p['name'] for p in human_players]))
+        # Afficher la liste des joueurs acceptés pour une meilleure visibilité
+        df_players = pd.DataFrame([{"Nom": p['name'], "Rôle": "Joueur Humain" if p['name'] != host_name else "Contrôleur/Joueur"} for p in human_players])
+        st.dataframe(df_players, hide_index=True, use_container_width=True)
     else:
         st.warning("Aucun joueur humain accepté. Le jeu se jouera avec l'IA seule.")
         
@@ -992,12 +1011,12 @@ def show_lobby_guest(game_id, my_name):
     pending_players = st.session_state.get('pending_players', [])
     
     if my_name in player_names:
-        st.success("✅ Vous avez été accepté(e) dans la partie.")
+        st.success("✅ Vous avez été accepté(e) dans la partie. Préparez-vous !")
         st.subheader("En attente du Contrôleur...")
         st.write(f"Le Contrôleur de la partie ({st.session_state.host_name}) doit lancer le jeu.")
         
     elif my_name in pending_players:
-        st.warning("⏳ Votre demande de participation est **en attente d'approbation** par le Contrôleur.")
+        st.warning("⏳ Votre demande de participation est **en attente d'approbation** par le Contrôleur. Cliquez sur le bouton d'actualisation dans la barre latérale pour vérifier si votre statut change.")
         st.subheader("Veuillez patienter.")
     else:
         # Ceci ne devrait pas arriver si le joueur a rejoint correctement, mais c'est une sécurité
@@ -1063,7 +1082,7 @@ def main():
                      # 3. Ajouter à la liste des joueurs en attente
                      st.session_state.pending_players.append(player_name)
                      save_game_state_to_db(join_id, st.session_state)
-                     st.success(f"Demande de participation envoyée au Contrôleur pour la partie {join_id}.")
+                     st.success(f"Demande de participation envoyée au Contrôleur pour la partie {join_id}. Le Contrôleur doit actualiser son lobby et vous accepter.")
                      st.rerun()
 
             else:
