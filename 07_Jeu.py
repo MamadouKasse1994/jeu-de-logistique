@@ -1248,7 +1248,12 @@ def main():
         if st.sidebar.button("Actualiser le Statut du Jeu", type="secondary", use_container_width=True):
             sync_game_state(game_id)
             
-        if st.sidebar.button("Quitter la Partie", type="danger", use_container_width=True):
+        if st.sidebar.button(
+            "Quitter la Partie", 
+            type="danger", 
+            use_container_width=True,
+            key="bouton_quitter_partie"  # <-- ADD THIS UNIQUE KEY
+        ):
              # Réinitialiser la session pour revenir au menu initial
              for key in list(st.session_state.keys()):
                  del st.session_state[key]
