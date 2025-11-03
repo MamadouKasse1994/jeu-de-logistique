@@ -752,6 +752,7 @@ def run_next_turn(actions_dict):
     
     # 4. Réinitialisation des actions et du statut de prêt
     new_state_data["actions_this_turn"] = {}
+    # N'efface pas les joueurs IA qui n'ont pas de 'players_ready'
     new_state_data["players_ready"] = {p["name"]: False for p in new_state_data["players"] if p["is_human"]} 
     
     # 5. Mise à jour de la session Streamlit (Correction de l'erreur StreamlitAPIException)
@@ -1040,11 +1041,14 @@ def main():
     game_id = st.session_state.game_id
     my_name = st.session_state.my_name
     
+    # --- Rôle du Contrôleur ---
+    is_controller = my_name == st.session_state.host_name
+    
     # Affichage du chat et du bouton de synchro
     show_chat_sidebar(game_id, my_name) 
     
     st.title("🚛 Simulateur de Transport Multijoueur")
-    st.caption(f"Partie ID: **{game_id}** | Joueur: **{my_name}**")
+    st.caption(f"Partie ID: **{game_id}** | Joueur: **{my_name}** | Rôle: **{'Contrôleur' if is_controller else 'Participant'}**")
     
     # Vérication de fin de partie
     active_players = [p for p in st.session_state.players if p['active'] or p.get('can_recover')]
@@ -1104,7 +1108,7 @@ def main():
             st.success(f"Actions de {my_name} enregistrées. En attente des autres joueurs...")
             st.rerun()
             
-    # --- Bloc d'Avancement du Tour ---
+    # --- Bloc d'Avancement du Tour (Contrôlé par le Host) ---
     st.divider()
     with st.container(border=True):
         st.subheader("Avancement du Tour")
@@ -1115,21 +1119,40 @@ def main():
         st.markdown(f"**{ready_count}/{total_human}** joueurs humains ont validé leurs actions.")
         
         if ready_count == total_human:
-            st.success("TOUS LES JOUEURS SONT PRÊTS. Le tour peut être exécuté.")
-            # Seul l'hôte (ou le premier à être un humain) devrait en théorie pouvoir cliquer
-            if st.button("▶️ Exécuter le Prochain Tour", type="primary", disabled=not player_human["active"]): 
-                # On vérifie si le joueur est actif
-                if not player_human["active"]:
-                     st.error("Vous êtes en faillite. Vous ne pouvez pas exécuter le tour.")
-                     st.rerun()
-                else:
-                    all_actions = st.session_state.actions_this_turn
-                    run_next_turn(all_actions)
-                    st.rerun()
+            st.success("TOUS LES JOUEURS SONT PRÊTS.")
+            
+            if is_controller:
+                # --- NOUVEAU: Affichage des actions pour le Contrôleur ---
+                with st.expander("👁️ Examiner les Actions Soumises par les Participants", expanded=True):
+                    # On affiche les actions soumises par les joueurs humains
+                    human_actions_submitted = {
+                        name: action for name, action in st.session_state.actions_this_turn.items() 
+                        if name in [p['name'] for p in human_players]
+                    }
+                    if human_actions_submitted:
+                         st.json(human_actions_submitted)
+                    else:
+                         st.warning("Aucune action humaine soumise (ceci ne devrait pas arriver si tout le monde est prêt).")
+                    
+                st.markdown("---")
+                # Le Contrôleur est le seul à voir le bouton d'exécution
+                if st.button("▶️ Exécuter le Prochain Tour", type="primary"): 
+                    if not player_human["active"]:
+                         st.error("Le Contrôleur (Host) est en faillite. Il ne peut pas exécuter le tour.")
+                         # Note: Même s'il est en faillite, il est le seul à pouvoir cliquer. S'il est liquidé (can_recover=False), il n'aurait pas pu cliquer.
+                         st.rerun()
+                    else:
+                        all_actions = st.session_state.actions_this_turn
+                        run_next_turn(all_actions)
+                        st.rerun()
+            else:
+                # Message pour les participants
+                st.info("En attente du **Contrôleur (Host)** pour examiner les actions et lancer le prochain tour...")
+                
         else:
             # Afficher les joueurs non prêts
             waiting_players = [p['name'] for p in human_players if not st.session_state.players_ready.get(p['name'])]
-            st.info(f"Joueurs en attente : {', '.join(waiting_players)}")
+            st.info(f"Joueurs en attente de validation : {', '.join(waiting_players)}")
             
     st.divider()
     
