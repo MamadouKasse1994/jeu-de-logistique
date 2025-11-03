@@ -742,8 +742,6 @@ def run_next_turn(actions_dict):
     """ Lance la simulation du tour, met à jour l'état et le synchronise. """
     
     # 1. Copie de l'état actuel de la session pour la simulation
-    # On travaille sur une copie de deepcopy(st.session_state) pour éviter
-    # les erreurs de modification pendant le calcul.
     current_state_copy = deepcopy(dict(st.session_state))
     
     # 2. Exécution du tour (Met à jour current_state_copy)
@@ -756,9 +754,21 @@ def run_next_turn(actions_dict):
     new_state_data["actions_this_turn"] = {}
     new_state_data["players_ready"] = {p["name"]: False for p in new_state_data["players"] if p["is_human"]} 
     
-    # 5. Mise à jour de la session Streamlit
-    # L'état complet de la session est mis à jour avec les résultats
-    st.session_state.update(new_state_data)
+    # 5. Mise à jour de la session Streamlit (Correction de l'erreur StreamlitAPIException)
+    # Nous mettons à jour clé par clé pour éviter les conflits avec les clés internes de Streamlit.
+    keys_to_update = ['game_id', 'turn', 'market_trend', 'backlog_packages', 'event_history', 
+                      'current_event', 'players', 'num_ia_players', 'host_name', 
+                      'actions_this_turn', 'players_ready', 'game_ready']
+    
+    for key in keys_to_update:
+        if key in new_state_data:
+            # Assurez-vous d'utiliser la valeur dupliquée pour l'update
+            st.session_state[key] = new_state_data[key]
+            
+    # On met à jour les clés spécifiques à l'utilisateur si elles sont présentes
+    if 'my_name' in new_state_data: st.session_state.my_name = new_state_data['my_name']
+    if 'current_user_name' in new_state_data: st.session_state.current_user_name = new_state_data['current_user_name']
+    # FIN DE LA CORRECTION
     
     # 6. Sauvegarde dans la BDD
     # save_game_state_to_db utilise deepcopy(st.session_state) et to_serializable
