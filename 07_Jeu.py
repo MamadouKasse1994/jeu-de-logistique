@@ -588,7 +588,7 @@ def simulate_turn_streamlit(game_state, actions_dict):
             elif event_type == "Cyber": p["reputation"] = max(0.5, p["reputation"] * current_event.get("rep_penalty_uncovered", 1.0))
         elif event_type in ["Logistique", "Carburant"] and rd_type_covered == event_type:
              if event_type == "Carburant": cost_mod_event = current_event.get("cost_protection_covered", 1.0) 
-             elif event_type == "Logistique": market_mod_event = current_event.get("market_bonus_covered", 1.0)
+             elif event_type == "Logistique": market_mod_event = current_event.get("market_bonus_covered", 1.10) # Utiliser la valeur de bonus
         
         # 1. Gestion de la dette et des intérêts
         interest_paid = 0
@@ -768,7 +768,6 @@ def run_next_turn(actions_dict):
     # On met à jour les clés spécifiques à l'utilisateur si elles sont présentes
     if 'my_name' in new_state_data: st.session_state.my_name = new_state_data['my_name']
     if 'current_user_name' in new_state_data: st.session_state.current_user_name = new_state_data['current_user_name']
-    # FIN DE LA CORRECTION
     
     # 6. Sauvegarde dans la BDD
     # save_game_state_to_db utilise deepcopy(st.session_state) et to_serializable
@@ -936,7 +935,14 @@ def show_chat_sidebar(game_id, player_name):
         st.info("Synchronisation...")
         loaded_state = load_game_state_from_db(game_id)
         if loaded_state:
-             st.session_state.update(loaded_state)
+             # Correction de l'erreur ici aussi (au cas où la synchro manuelle était utilisée)
+             keys_to_transfer = ['game_id', 'turn', 'market_trend', 'backlog_packages', 'event_history', 
+                                 'current_event', 'players', 'num_ia_players', 'host_name', 
+                                 'actions_this_turn', 'players_ready', 'game_ready']
+             for key in keys_to_transfer:
+                 if key in loaded_state:
+                     st.session_state[key] = loaded_state[key]
+
              # On remet les clés spécifiques à l'utilisateur qui ne sont pas sauvegardées
              st.session_state.my_name = st.session_state.get('my_name', st.session_state.get('current_user_name'))
              st.session_state.current_user_name = st.session_state.get('current_user_name', st.session_state.get('my_name'))
@@ -976,7 +982,20 @@ def main():
         
         if st.button("🔗 Rejoindre la Partie"):
             loaded_state = load_game_state_from_db(join_id)
+            
             if loaded_state:
+                
+                # Correction de l'erreur ici : Mise à jour clé par clé
+                keys_to_transfer = [
+                    'game_id', 'turn', 'market_trend', 'backlog_packages', 'event_history', 
+                    'current_event', 'players', 'num_ia_players', 'host_name', 
+                    'actions_this_turn', 'players_ready', 'game_ready'
+                ]
+                
+                # 1. Transfert des données de jeu principales (même si le joueur est déjà là)
+                for key in keys_to_transfer:
+                    if key in loaded_state:
+                        st.session_state[key] = loaded_state[key]
                 
                 # Ajouter le joueur s'il n'est pas déjà dans la partie
                 if player_name not in [p['name'] for p in loaded_state['players']]:
@@ -989,21 +1008,16 @@ def main():
                         "delivered_packages_total": {t: 0 for t in COLIS_TYPES}, "income": 0, 
                         "expenses": 0, "asset_value": 0, "total_capacity": 0,
                     }
-                    loaded_state['players'].append(new_player)
-                    loaded_state['players_ready'][player_name] = False
-                    
-                    # Mise à jour des joueurs humains (non stockée, mais utile pour l'affichage)
-                    # loaded_state['num_human_players'] = len([p for p in loaded_state['players'] if p['is_human']])
+                    st.session_state.players.append(new_player)
+                    st.session_state.players_ready[player_name] = False
                     
                     # Mise à jour de la session Streamlit et sauvegarde de l'état modifié
-                    st.session_state.update(loaded_state)
                     st.session_state.my_name = player_name
                     st.session_state.game_id = join_id
                     save_game_state_to_db(join_id, st.session_state)
                     
                 else:
-                    # Si le joueur existe déjà, on charge juste l'état
-                    st.session_state.update(loaded_state)
+                    # Si le joueur existe déjà, l'état a été chargé à l'étape 1
                     st.session_state.my_name = player_name
                     st.session_state.game_id = join_id
 
