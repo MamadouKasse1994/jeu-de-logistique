@@ -111,14 +111,18 @@ def load_game_state_from_db(game_id):
     if not supabase: return None
 
     try:
-        response = supabase.table("games").select("state_json").eq("game_id", game_id).single().execute()
+        # CORRECTION: Changement de .single() à .limit(1) pour prévenir l'erreur PGRST116
+        # si plusieurs enregistrements ont le même game_id, et prendre le premier trouvé.
+        response = supabase.table("games").select("state_json").eq("game_id", game_id).limit(1).execute()
     except Exception as e:
         st.error(f"Erreur lors du chargement de l'état du jeu depuis la base de données: {e}")
         return None
 
-    if response.data and response.data["state_json"]:
+    # response.data est une liste. Nous vérifions si elle n'est pas vide et si le premier élément contient state_json.
+    if response.data and len(response.data) > 0 and response.data[0].get("state_json"):
         try:
-            loaded_state_data = json.loads(response.data["state_json"])
+            # Accéder à state_json à partir du premier élément de la liste
+            loaded_state_data = json.loads(response.data[0]["state_json"])
             return loaded_state_data
         except json.JSONDecodeError:
             st.error("Erreur de décodage JSON de l'état du jeu chargé.")
@@ -958,7 +962,7 @@ def show_game_interface_human(player_name):
         
         with col_loan_req:
             loan_request = st.number_input("Demande de Prêt (0 pour ignorer)", min_value=0, step=10000, value=0, key="loan_request")
-            st.caption(f"Max empruntable: {int(p['asset_value'] * MAX_LOAN_CAPACITY_RAT):,} €".replace(",", " "))
+            st.caption(f"Max empruntable: {int(p['asset_value'] * MAX_LOAN_CAPACITY_RATIO):,} €".replace(",", " "))
 
         with col_loan_pay:
             loan_payment = st.number_input("Remboursement de Prêt (0 pour ignorer)", min_value=0, step=10000, value=0, key="loan_payment")
@@ -1024,7 +1028,7 @@ def show_game_interface_human(player_name):
         chat_msg = st.text_input("Votre message:", key="chat_input")
         if st.button("Envoyer", key="send_chat_msg") and chat_msg:
             update_game_chat(st.session_state.game_id, player_name, chat_msg)
-            st.experimental_rerun()
+            st.rerun() # Remplacement de st.experimental_rerun()
             
         st.markdown("---")
         st.subheader("Avancement du Tour")
