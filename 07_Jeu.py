@@ -111,8 +111,7 @@ def load_game_state_from_db(game_id):
     if not supabase: return None
 
     try:
-        # CORRECTION: Changement de .single() à .limit(1) pour prévenir l'erreur PGRST116
-        # si plusieurs enregistrements ont le même game_id, et prendre le premier trouvé.
+        # CORRECTION du bug PGRST116 (doublons)
         response = supabase.table("games").select("state_json").eq("game_id", game_id).limit(1).execute()
     except Exception as e:
         st.error(f"Erreur lors du chargement de l'état du jeu depuis la base de données: {e}")
@@ -291,7 +290,8 @@ def show_lobby_host(game_id, host_name):
 
     if st.button("Actualiser le Lobby (Voir les Nouveaux Joueurs)", type="secondary", use_container_width=True):
         st.info("Synchronisation forcée...")
-        sync_game_state(game_id)
+        # L'appel à sync_game_state recharge l'état complet du jeu, incluant pending_players
+        sync_game_state(game_id) 
 
     st.caption("Pour une meilleure expérience, demandez aux joueurs invités de cliquer sur le bouton 'Actualiser le Statut du Jeu' dans la barre latérale.")
     st.markdown("---")
@@ -971,7 +971,7 @@ def show_game_interface_human(player_name):
             # Interface de Vente Volontaire (avec sélection par UUID)
             st.markdown("**Vendre Camion (UUID)**")
             sell_trucks_selection = {}
-            available_trucks = [{"id": t["id"], "uuid": str(t["uuid"])} for t in p["trucks"]]
+            available_trucks = [{"id": t["id"], "uuid": str(t["uuid"])} for t in p["trucks"]}
             
             if available_trucks:
                 truck_options = {t["uuid"]: f"{t['id']} (UUID: {t['uuid'][:4]}...)" for t in available_trucks}
@@ -1028,7 +1028,7 @@ def show_game_interface_human(player_name):
         chat_msg = st.text_input("Votre message:", key="chat_input")
         if st.button("Envoyer", key="send_chat_msg") and chat_msg:
             update_game_chat(st.session_state.game_id, player_name, chat_msg)
-            st.rerun() # Remplacement de st.experimental_rerun()
+            st.rerun() 
             
         st.markdown("---")
         st.subheader("Avancement du Tour")
@@ -1120,85 +1120,101 @@ def show_leaderboard(game_state):
 
 def afficher_page_accueil():
     st.title("🌐 Jeu de Logistique Multijoueur")
-    st.markdown("Choisissez de **Créer** une nouvelle partie ou de **Rejoindre** une partie existante.")
+    st.markdown("---")
 
     st.session_state.current_user_name = st.text_input("Votre Nom/Nom d'Entreprise (ex: Ent. A)", key="main_user_name")
     
-    if st.session_state.current_user_name:
-        col_create, col_join = st.columns(2)
-        
-        with col_create:
-            st.subheader("Créer une Partie")
-            st.markdown("Vous deviendrez le **Contrôleur** de la partie.")
-            num_ia = st.slider("Nombre d'IA concurrentes initiales", 1, 5, 2, key="num_ia_init")
-            host_participates = st.checkbox("Je participe également en tant que joueur", value=True, key="host_participates")
-            
-            if st.button("🚀 Créer et Lancer Lobby", type="primary", use_container_width=True):
-                initialize_game_state(st.session_state.current_user_name, num_ia, host_participates)
-                st.session_state.page = "LOBBY"
-                st.rerun()
+    if not st.session_state.current_user_name:
+        st.warning("Veuillez entrer votre nom ou nom d'entreprise pour continuer.")
+        return
 
-        with col_join:
-            st.subheader("Rejoindre une Partie")
-            game_id_input = st.text_input("Entrez l'ID de la Partie:", key="join_game_id")
+    # Nouvelle organisation des options
+    tab_create, tab_join = st.tabs(["⭐ Créer une Partie (Contrôleur)", "🔗 Rejoindre une Partie (Joueur)"])
+
+    with tab_create:
+        st.subheader("Devenir le Contrôleur de la Partie")
+        st.info("Vous gérez le lobby, lancez le jeu et êtes responsable de la synchronisation.")
+        
+        mode = st.radio("Votre rôle dans cette partie", 
+                        ["Contrôleur ET Joueur (vous jouez)", "Contrôleur UNIQUEMENT (mode observateur/admin)"], 
+                        key="host_participates_mode")
+        
+        host_participates = (mode == "Contrôleur ET Joueur (vous jouez)")
+        
+        num_ia = st.slider("Nombre d'IA concurrentes initiales", 1, 5, 2, key="num_ia_init")
+        
+        if st.button("🚀 Créer et Lancer Lobby", type="primary", use_container_width=True):
+            initialize_game_state(st.session_state.current_user_name, num_ia, host_participates)
+            st.session_state.page = "LOBBY"
+            st.rerun()
+
+    with tab_join:
+        st.subheader("Rejoindre une Partie Existante")
+        st.info("Vous avez besoin de l'ID de partie fourni par le Contrôleur.")
+        
+        game_id_input = st.text_input("Entrez l'ID de la Partie:", key="join_game_id")
+        
+        if st.button("🔗 Demander à Rejoindre", type="secondary", use_container_width=True) and game_id_input:
+            loaded_state = load_game_state_from_db(game_id_input)
             
-            if st.button("🔗 Rejoindre la Partie", type="secondary", use_container_width=True) and game_id_input:
-                loaded_state = load_game_state_from_db(game_id_input)
+            if loaded_state:
+                st.session_state.game_id = game_id_input
+                st.session_state.game_state = loaded_state
                 
-                if loaded_state:
-                    st.session_state.game_id = game_id_input
-                    st.session_state.game_state = loaded_state
+                player_already_in = st.session_state.current_user_name in [p['name'] for p in loaded_state.get('players', [])]
+                player_pending = st.session_state.current_user_name in loaded_state.get('pending_players', [])
+
+                if loaded_state.get('game_status') == 'in_progress' and not player_already_in:
+                    st.error("Impossible de rejoindre une partie déjà en cours.")
                     
-                    if loaded_state.get('game_status') == 'in_progress':
-                        # Pour les joueurs qui rejoignent après le lancement
-                        st.error("Impossible de rejoindre une partie déjà en cours.")
-                        
-                    elif st.session_state.current_user_name in [p['name'] for p in loaded_state.get('players', [])]:
-                        st.session_state.my_name = st.session_state.current_user_name
-                        st.session_state.page = "JEU" # Si déjà accepté et en cours
-                        st.success("Reconnexion réussie!")
-                        st.rerun()
-                        
-                    elif st.session_state.current_user_name in loaded_state.get('pending_players', []):
-                        st.info("Votre demande est en attente d'approbation par le contrôleur.")
-                        st.session_state.my_name = st.session_state.current_user_name
-                        st.session_state.page = "WAITING"
-                        st.rerun()
-                        
-                    else:
-                        # Nouvelle demande d'adhésion
-                        st.session_state.game_state['pending_players'].append(st.session_state.current_user_name)
-                        st.session_state.my_name = st.session_state.current_user_name
-                        save_game_state_to_db(game_id_input, st.session_state.game_state)
-                        st.session_state.page = "WAITING"
-                        st.success("Demande d'adhésion envoyée. En attente de l'approbation du contrôleur.")
-                        st.rerun()
+                elif player_already_in:
+                    st.session_state.my_name = st.session_state.current_user_name
+                    st.session_state.page = "JEU"
+                    st.success("Reconnexion réussie! Vous êtes déjà joueur dans cette partie.")
+                    st.rerun()
+                    
+                elif player_pending:
+                    st.info("Votre demande est déjà en attente d'approbation par le contrôleur.")
+                    st.session_state.my_name = st.session_state.current_user_name
+                    st.session_state.page = "WAITING"
+                    st.rerun()
+                    
                 else:
-                    st.error("ID de partie non valide ou non trouvé.")
+                    # Nouvelle demande d'adhésion
+                    st.session_state.game_state['pending_players'].append(st.session_state.current_user_name)
+                    st.session_state.my_name = st.session_state.current_user_name
+                    # Sauvegarde des pending_players mis à jour
+                    save_game_state_to_db(game_id_input, st.session_state.game_state) 
+                    st.session_state.page = "WAITING"
+                    st.success("Demande d'adhésion envoyée. En attente de l'approbation du contrôleur.")
+                    st.rerun()
+            else:
+                st.error("ID de partie non valide ou non trouvé.")
 
 def show_waiting_room(player_name, game_id):
     st.title("Salle d'Attente")
     st.info(f"ID de la Partie: **{game_id}** | Votre nom: **{player_name}**")
     st.warning("Votre demande d'adhésion est en attente de l'approbation du contrôleur (l'hôte).")
-    st.caption("Une fois accepté, cette page sera mise à jour automatiquement.")
+    st.caption("Cliquez sur Actualiser le Statut dans la barre latérale pour vérifier si vous avez été accepté.")
 
-    if st.button("Actualiser le Statut", type="secondary"):
-        loaded_state = load_game_state_from_db(game_id)
-        if loaded_state:
-            st.session_state.game_state = loaded_state
-            
-            if player_name in [p['name'] for p in loaded_state.get('players', [])]:
-                st.success("🎉 Vous avez été accepté! Préparez-vous à jouer.")
-                st.session_state.page = "JEU"
-                st.rerun()
-            elif loaded_state.get('game_status') == 'in_progress':
-                st.error("La partie a démarré sans vous. Impossible de rejoindre.")
-                st.session_state.page = "MENU"
-                st.rerun()
-            else:
-                st.info("Toujours en attente d'approbation...")
-        else:
-            st.error("Impossible de charger l'état du jeu. L'ID de la partie est peut-être incorrect.")
+    # Note: Le bouton "Actualiser" a été déplacé dans la sidebar pour l'uniformité
+    
+    # Affichage du statut d'attente
+    st.markdown("---")
+    st.subheader("Statut Actuel")
+    if st.session_state.get('game_state', {}).get('game_status') == 'in_progress':
+        st.error("La partie a démarré sans vous. Veuillez retourner au menu.")
+        if st.button("Retour au Menu Principal"):
+            st.session_state.page = "MENU"
+            st.rerun()
+    elif player_name in st.session_state.get('game_state', {}).get('pending_players', []):
+        st.info("Statut : En attente d'approbation de l'hôte...")
+    else:
+        st.error("Une erreur s'est produite (possible rejet). Veuillez réessayer de rejoindre ou contacter l'hôte.")
+        if st.button("Retourner à la page d'accueil"):
+            st.session_state.page = "MENU"
+            st.rerun()
+
 
 def main():
     """Contrôleur principal de l'application."""
@@ -1208,15 +1224,36 @@ def main():
     if 'game_state' not in st.session_state:
         st.session_state.game_state = {}
     
-    # Barre latérale de synchronisation pour les joueurs non-host
-    if st.session_state.page != "MENU" and st.session_state.get('game_id') and st.session_state.get('my_name') != st.session_state.game_state.get('host_name'):
+    # Barre latérale de synchronisation pour TOUS les joueurs (sauf MENU)
+    if st.session_state.page != "MENU" and st.session_state.get('game_id'):
         with st.sidebar:
-            st.header("Synchronisation")
+            st.header("Synchronisation du Jeu")
             st.info(f"ID: **{st.session_state.game_id}**")
+            
+            # Synchronisation pour tous les joueurs (Host, Guest, Waiting)
             if st.button("Actualiser le Statut du Jeu", use_container_width=True):
                 sync_game_state(st.session_state.game_id)
+                # Si le joueur est en WAITING et a été accepté, on le passe en JEU
+                if st.session_state.page == "WAITING":
+                    loaded_state = st.session_state.game_state
+                    if st.session_state.my_name in [p['name'] for p in loaded_state.get('players', [])]:
+                        st.session_state.page = "JEU"
+                        st.rerun()
+                
+            
+            if st.session_state.page == "LOBBY":
+                st.warning("Ce bouton est l'équivalent du bouton 'Actualiser le Lobby' dans l'écran principal.")
+            
+            st.markdown("---")
+            if st.button("Quitter la Partie / Menu Principal", type="secondary", use_container_width=True):
+                st.session_state.page = "MENU"
+                st.session_state.game_state = {}
+                st.session_state.game_id = None
+                st.session_state.my_name = None
+                st.rerun()
 
-    # Logique d'avancement de tour automatique
+
+    # Logique d'avancement de tour automatique (pour le contrôleur)
     if st.session_state.get('game_state', {}).get('game_status') == 'in_progress' and st.session_state.get('my_name') == st.session_state.game_state.get('host_name'):
         handle_turn_advance(st.session_state.game_id)
 
