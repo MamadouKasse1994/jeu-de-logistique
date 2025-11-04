@@ -971,7 +971,8 @@ def show_game_interface_human(player_name):
             # Interface de Vente Volontaire (avec sélection par UUID)
             st.markdown("**Vendre Camion (UUID)**")
             sell_trucks_selection = {}
-            available_trucks = [{"id": t["id"], "uuid": str(t["uuid"])} for t in p["trucks"]}
+            # CORRECTION DE SYNTAXE ICI: Utilisation de crochets [] pour la compréhension de liste
+            available_trucks = [{"id": t["id"], "uuid": str(t["uuid"])} for t in p["trucks"]]
             
             if available_trucks:
                 truck_options = {t["uuid"]: f"{t['id']} (UUID: {t['uuid'][:4]}...)" for t in available_trucks}
