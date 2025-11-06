@@ -739,7 +739,7 @@ def show_setup_screen():
         player_name = st.text_input("Votre nom d'utilisateur (Joueur)", key="player_name_input")
 
         if st.button("🤝 Envoyer Demande de Jointure", type="secondary", use_container_width=True, disabled=not (join_game_id and player_name)):
-            if submit_join_request(join_game_id, player_name):
+            if submit_join_request(join_game_id, player_name): # <--- C'est ici
                 # Mise à jour de la session pour l'écran d'attente
                 st.session_state.my_name = player_name
                 st.session_state.game_id = join_game_id
